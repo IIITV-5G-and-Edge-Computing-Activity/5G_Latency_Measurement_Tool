@@ -1,0 +1,9 @@
+#!/usr/bin/python3
+from experiments5G.eval import streamlit_eval # import experiments5G
+from pathlib import Path
+import os
+
+if __name__ == "__main__":
+    p = Path(streamlit_eval.__file__)
+    assert p.exists()
+    os.system(f"streamlit run {p}")

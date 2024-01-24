@@ -1,0 +1,15 @@
+syntax = "proto3";
+
+package experiments5G;
+
+service LatencyExperiments {
+    rpc MyCall(Request) returns (Response) {}
+}
+
+message Request {
+    bytes data = 1;
+}
+
+message Response {
+    bytes data = 1;
+}

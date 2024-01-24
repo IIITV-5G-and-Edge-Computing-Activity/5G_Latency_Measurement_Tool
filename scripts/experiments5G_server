@@ -1,0 +1,103 @@
+#!/usr/bin/python3
+
+from concurrent.futures import process
+from urllib import response
+from experiments5G.commons.common import get_isotime
+from experiments5G.communication import INTERFACES
+from experiments5G.commons.packet_logger import PacketLogger
+from pathlib import Path
+import threading
+import asyncio
+from tornado.platform.asyncio import AnyThreadEventLoopPolicy
+import functools
+
+# SETTINGS
+DEFAULT_LOG_DIR = Path().home() / "experiments5G" / "logs"  # / get_isotime()
+RESPONSE_OPTIONS = {
+    "true": "The server responds with a success flag.",
+    "same": "The server responds with the request.",
+}
+DEFAULT_RESPONSE_OPTION = "true"
+###
+
+
+def run_servers(interfaces,
+                log_dir,
+                response_option):
+
+    # === REQUIRED FOR REST AND MQTT ===
+    # required for tornado (becase RESTServer starts its own subthread and this is against asyncio's default policy):
+    asyncio.set_event_loop_policy(AnyThreadEventLoopPolicy())
+    log_dir = log_dir.resolve()
+    # ======
+
+    isot = get_isotime()
+
+    if response_option == "same":
+        def get_response(request):
+            return request
+    elif response_option == "true":
+        def get_response(request):
+            return bytes(True)
+    else:
+        raise Exception(f"Invalid response option {response_option}")
+
+    def response_fn(request_data, client_address, logger):
+        response_data = get_response(request_data)
+        logger.server_log(request_data, response_data)
+        return response_data
+
+    for interface_name in interfaces:
+        name = f"{interface_name}_server"
+        csv_path = log_dir / name / f"{isot}.csv" if log_dir else None
+
+        logger = PacketLogger(name, csv_path)
+        interface = INTERFACES[interface_name]
+
+        # def response_fn(request_data, client_address):
+        #     response_data = get_response(request_data)
+        #     logger.server_log(request_data, response_data)
+        #     return response_data
+
+        def server_fn():
+            for t, request_data in interface.listen(functools.partial(response_fn, logger=logger)):
+                logger.server_log(request_data)
+
+        threading.Thread(target=server_fn).start()
+
+
+if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--interfaces',
+                        nargs='+',
+                        choices=list(INTERFACES.keys()),
+                        default=list(INTERFACES.keys()),
+                        help="List of the interfaces which the client uses alternately to send the packets. By default all available interfaces are used.")
+    parser.add_argument('--no-log',
+                        dest='log',
+                        action='store_false',
+                        help="If this flag is passed, no CSV logs will be created on this peer. Has higher priority than --logdir.")
+    parser.add_argument('--logdir',
+                        type=lambda x: Path(x).resolve(),
+                        default=DEFAULT_LOG_DIR,
+                        help=f"Directory to save the CSV logs in. Default: {DEFAULT_LOG_DIR}. Disable logging by passing the flag --no-log")
+    parser.add_argument('--response',
+                        choices=list(RESPONSE_OPTIONS.keys()),
+                        default=DEFAULT_RESPONSE_OPTION,
+                        help=f"Which kind of response the server sends. Options: {RESPONSE_OPTIONS}. Default: {DEFAULT_RESPONSE_OPTION}")
+    # parser.add_argument('--ports',
+    #                     nargs='+',
+    #                     type=int,
+    #                     default=None,
+    #                     help="Ports to be used for each interface (in the same order as the interfaces). If this option is used, ports for all interfaces must be given. Otherwise, the default ports {MQTT: 1883, gRPC: 1234, REST:8080, zmq:5555} are used.")
+
+    args = parser.parse_args()
+    log_dir = args.logdir if args.log else None
+    if log_dir is not None:
+        log_dir.mkdir(exist_ok=True, parents=True)
+        assert log_dir.exists()
+
+    run_servers(interfaces=args.interfaces,
+                log_dir=log_dir,
+                response_option=args.response)

@@ -1,0 +1,26 @@
+stages:
+  # - build:image
+  - test
+
+# build:image:
+#   stage: build:image
+#   tags:
+#     - docker
+#   before_script:
+#     - docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
+#   script:
+#     - docker build --no-cache -t $CI_REGISTRY_IMAGE:$CI_COMMIT_BRANCH -f Dockerfile .
+#     - docker push $CI_REGISTRY_IMAGE:$CI_COMMIT_BRANCH
+
+test:
+  stage: test
+  image: python:3.8.10
+  # before_script:
+  #   - echo "Acquire::http::Proxy \"[http://apt-cache.ni.dfki:8000\";]http://apt-cache.ni.dfki:8000\";" > /etc/apt/apt.conf.d/00proxy
+  script:
+    - apt-get update
+    #- apt-get install -y python3-pip gcc g++ python3-dev build-essential
+    - pip3 install .
+    - make test
+    # - python3 tests/interface_tests.py
+    # - python3 tests/logger_tests.py

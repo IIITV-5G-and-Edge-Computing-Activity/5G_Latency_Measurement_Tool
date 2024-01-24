@@ -1,0 +1,163 @@
+#!/usr/bin/python3
+
+from experiments5G.communication import INTERFACES
+from experiments5G.commons.packet_logger import PacketLogger
+from experiments5G.commons.position import PosBase, RosGpsPos, ManualPos, RandomPos
+from experiments5G.commons.common import get_isotime
+from humanfriendly import parse_size
+from pathlib import Path
+import time
+import os
+from typing import List
+
+# DEFAULTS
+###############################################
+DEFAULT_HOST = "192.168.1.218" # "localhost"  # "192.168.1.5"  # "localhost" # "Container-ODROID-H2"
+DEFAULT_PACKET_SIZES = [
+    # 10*10**3,  # 10kB
+    # 100*10**3,  # 100kB
+    # 1*10**6,  # 1MB
+    
+    1000,
+    10000,
+    100000
+]
+DEFAULT_LOG_DIR = Path().home() / "experiments5G" / "logs"  # / get_isotime()
+DEFAULT_ROS_GPS_TOPIC = "/ublox_gps/fix"
+###############################################
+
+# REST fails for >= 1GB
+# Max package size for gRPC: 100MB
+# MQTT: currently only seems to work for packages up to 100kB
+#   Reason: mqttools is used because it is simple to install and offers the full set of required software (broker, publishers, subscribers)
+#   But mqttools only supports QoS 0 (peers don't confirm that a communication was successful, only TCP guarantess)
+#   Mybe the bigger packets (>= 1MB) get lost
+
+
+def run(host,
+        interface_names: List[str],
+        packet_sizes: List[int],
+        log_dir: Path,
+        gps: PosBase,
+        gps_mode: str,
+        max_time=1.0):
+
+    isot = get_isotime()
+    interfaces = []
+
+    for interface_name in interface_names:
+        name = f"{interface_name}_client"
+        csv_path = log_dir / name / f"{isot}.csv" if log_dir else None
+        logger = PacketLogger(name, csv_path)
+        interfaces.append((INTERFACES[interface_name], logger))
+
+    print("max_time=", max_time)
+    while True:
+        for packet_size in packet_sizes:
+            for interface, logger in interfaces:
+                t = time.time()
+                logger.print("=== Starting send ...")
+                position, gps_cache = gps.get_current_pos()
+                gps_cache["mode"] = gps_mode
+                request_data = logger.create_request_data(packet_size,
+                                                          position,
+                                                          cache=gps_cache)
+                try:
+                    duration, response_data = interface.send(data=request_data,
+                                                    host=host,
+                                                    max_time=max_time)
+                    # assert request_data == response_data
+                except Exception as e:
+                    print(f"EXCEPTION while sending with {interface}: {str(e)}")
+                else:
+                    logger.client_log(request_data, response_data, duration=duration)
+                logger.print(f"=== Sending loop done in {time.time() - t}s...")
+
+
+if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        '--host',
+        type=str,
+        default=DEFAULT_HOST,
+        help='Address of the host where the corresponding server(s) are running.')
+    parser.add_argument('--interfaces',
+                        nargs='+',
+                        choices=list(INTERFACES.keys()),
+                        default=list(INTERFACES.keys()),
+                        help="List of the interfaces which the client uses alternately to send the packets. By default all available interfaces are used.")
+    parser.add_argument('--packet-sizes',
+                        nargs='+',
+                        default=DEFAULT_PACKET_SIZES,
+                        help=f"List of the sizes of packets that are sent to the alternately server in bytes. Common units are supported. No unit means bytes. Examples: 10K, 100kB, 1000KB, 1GB, .... . Recommended Package sizes: 1kB - 100kB. Default: {DEFAULT_PACKET_SIZES}",
+                        type=parse_size)
+    parser.add_argument('--no-log',
+                        dest='log',
+                        action='store_false',
+                        help="If this flag is passed, no CSV logs will be created on this peer. Has higher priority than --logdir.")
+    parser.add_argument('--logdir',
+                        type=lambda x: Path(x).resolve(),
+                        default=DEFAULT_LOG_DIR,
+                        help=f"Directory to save the CSV logs in. Default: {DEFAULT_LOG_DIR}. Disable logging by passing the flag --no-log")
+    parser.add_argument('--pos',
+                        type=str,
+                        choices=['manual', 'ROS', 'chicken', 'random'],
+                        default='ROS',
+                        help="The position provider module to be used.")
+    parser.add_argument('--ros-gps-topic',
+                        type=str,
+                        default=DEFAULT_ROS_GPS_TOPIC,
+                        help=f"ROS topic to subscribe to to get the current GPS coordinates. Also enables ROS GPS (like the flag --ros-gps, which is unecessary when --ros-gps-topic is passed). Default: {DEFAULT_ROS_GPS_TOPIC}.")
+    parser.add_argument('--max-time',
+                        type=float,
+                        default=1.0,
+                        help="Time within which each packet should be completely sent (otherwise the current sending process should be aborted). Unit: float seconds. Default: 1.0")
+    parser.add_argument('--random-pos-args',
+                        type=List[float],
+                        default=[0, 100, 0, 100],
+                        help="Arguments for --pos random. Takes 4 floats: [lower y, upper y, lower x, upper x], which describe the box in which to sample the coords. Default: [0,100,0,100]")
+    # parser.add_argument('--ports',
+    #                     nargs='+',
+    #                     type=int,
+    #                     default=None,
+    #                     help="Ports to be used for each interface (in the same order as the interfaces). If this option is used, ports for all interfaces must be given. Otherwise, the default ports {MQTT: 1883, gRPC: 1234, REST:8080, zmq:5555} are used.")
+
+    args = parser.parse_args()
+    print(f"Parsed Arguments: {args}")
+
+    initial_coords = (52.7014, 7.6949)
+    if args.pos == "ROS":
+        assert os.getenv(
+            "ROS_MASTER_URI"), "ENV variable $ROS_MASTER_URI must be set to use ROS GPS!"
+        gps = RosGpsPos(initial_coords, args.ros_gps_topic)
+    elif args.pos == "manual":
+        gps = ManualPos()
+    elif args.pos == "chicken":
+        def luefterdeckel_to_x(n):
+            n = int(n)
+            d = [0, 130, 235, 340, 445, 570, 700, 820]
+            if n < len(d):
+                return d[n]
+            else:
+                return 125 * (n - 7) + 820
+        
+        def wasserlinie_to_y(n):
+            n = int(n)
+            d = [0, 150, 350, 650, 850, 1150, 1350, 1650, 1850]
+            return d[n]
+    
+        gps = ManualPos(landmark_x_name="Lüfterdeckel",
+                        landmark_x_to_x_fn=luefterdeckel_to_x,
+                        landmark_y_name="Wasserlinie",
+                        landmark_y_to_y_fn=wasserlinie_to_y)
+    elif args.pos == "random":
+        gps = RandomPos(*args.random_pos_args)
+
+    run(host=args.host,
+        interface_names=args.interfaces,
+        packet_sizes=args.packet_sizes,
+        log_dir=args.logdir if args.log else None,
+        gps=gps,
+        gps_mode=args.pos,
+        max_time=args.max_time)

@@ -1,5 +1,10 @@
 # 5G Latency Experiment
 
+Report PDF Link : https://drive.google.com/file/d/19CAwjlnqSUinuZI2QP9-4olAmMOmhLGm/view?usp=sharing
+Report Overleaf Link : https://www.overleaf.com/read/mgdrfzbytjkz#00db25
+Video Link : https://drive.google.com/drive/folders/1wq9bkoJPoTmwmlFeB6ZIZpWj7OWt6BGJ?usp=sharing
+
+
 ## Statement of purpose
 
 Purpose of this code is to:
